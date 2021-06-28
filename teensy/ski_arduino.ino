@@ -38,7 +38,7 @@
 #define _REC_ESC   15 // Throttle PWM from radio control
 #define _STEER 23     // Absolute encoder for steering 10 bit PWM
 /******************* Some constants *******************************************/
-int DT = 14;                     // Sampling period: 14 for 50Hz ROS loop
+int DT = 5;                     // Sampling period: 14 for 50Hz ROS loop
 #define _REC_ESC_MIN 1065       // Radio control PWM range
 #define _REC_ESC_MAX 2006       //
 #define _REC_SERVO_MIN 1065     //
@@ -149,11 +149,12 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55,0x28); // 0x28 is I2C address
 sensors_event_t orientationData, angVelocityData, linearAccelData;
 // ROS related
 struct ros_message ros_msgs;
+float fb[fb_size];
 std_msgs::MultiArrayDimension dim[1];
 std_msgs::MultiArrayLayout layout;
 ros::NodeHandle nh; // ROS node
 // Publishers
-ros::Publisher pub_fb("truck/fb", &(ros_msgs.fb));
+ros::Publisher pub_fb("truck/fb", &ros_msgs.fb);
 // Subscribers
 void cmdModeCb(const std_msgs::Int32 &msg){ros_msgs.cmdMode = msg;}
 void cmdSteerCb(const std_msgs::Float32 &msg){ros_msgs.cmdSteer = msg;}
@@ -187,8 +188,6 @@ void setup() {
   ros_msgs.fb.layout = layout;
   ros_msgs.fb.data_length = fb_size;
   ros_msgs.fb.layout.dim_length = 1;
-  float fb[] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
-  ros_msgs.fb.data = fb;
   nh.initNode();
   // Advertise published topics
   nh.advertise(pub_fb);
@@ -212,21 +211,24 @@ int period = 20;
 void loop() {
   // Reading subscribers messages
   gen_command(ros_msgs.cmdMode.data);
+  // Executing commnands
+  esc.writeMicroseconds(esc_cmd);
+  steer.writeMicroseconds(steer_cmd);
   // Timing
   newMillis = millis();
   period = max(newMillis - oldMillis,1);
   oldMillis = newMillis;
   // Reading encoders
   wheel_inc_sens();
-  ros_msgs.fb.data[0] = wheel_inc.FL*speed_ratio/period; // reading velocities
-  ros_msgs.fb.data[1] = wheel_inc.FR*speed_ratio/period;
-  ros_msgs.fb.data[2] = wheel_inc.RL*speed_ratio/period;
-  ros_msgs.fb.data[3] = wheel_inc.RR*speed_ratio/period;
+  fb[0] = wheel_inc.FL*speed_ratio/period; // reading velocities
+  fb[1] = wheel_inc.FR*speed_ratio/period;
+  fb[2] = wheel_inc.RL*speed_ratio/period;
+  fb[3] = wheel_inc.RR*speed_ratio/period;
   // Reading PWM signals: receiver commands and steer encoder
   read_pwm_signal();
-  ros_msgs.fb.data[4] = -steer_ang_copy; // Comply with ROS program
-  ros_msgs.fb.data[5] = rec_servo_pwm_copy;
-  ros_msgs.fb.data[6] = rec_esc_pwm_copy;
+  fb[4] = -steer_ang_copy; // Comply with ROS program
+  fb[5] = rec_servo_pwm_copy;
+  fb[6] = rec_esc_pwm_copy;
   // Reading IMU
   //  7: imuAngx, Angle of rotation in xyz order in bodyframe, Rad
   //  8: imuAngz
@@ -236,16 +238,17 @@ void loop() {
   // 12: imuAccy
   // IMU axes are right hand rule, X to ground, Y to rear, Z to left
   // Car xyz: x to forward, y to left, z to up
-  ros_msgs.fb.data[7] = -orientationData.orientation.y*deg2rad;     // alpha
-  ros_msgs.fb.data[8] = 2*PI-orientationData.orientation.x*deg2rad; // psi
+  fb[7] = -orientationData.orientation.y*deg2rad;     // alpha
+  fb[8] = 2*PI-orientationData.orientation.x*deg2rad; // psi
   // Gyro and lin acc axes are different: X to right, Y to forward, Z to up
-  ros_msgs.fb.data[9] = deg2rad*angVelocityData.gyro.y;   // alpha_dot
-  ros_msgs.fb.data[10] = deg2rad*angVelocityData.gyro.z;  // psi_dot
-  ros_msgs.fb.data[11] = linearAccelData.acceleration.y;  // u_dot
-  ros_msgs.fb.data[12] = -linearAccelData.acceleration.z; // v_dot
-  ros_msgs.fb.data[12] = ros_msgs.cmdSteer.data;
+  fb[9] = deg2rad*angVelocityData.gyro.y;   // alpha_dot
+  fb[10] = deg2rad*angVelocityData.gyro.z;  // psi_dot
+  fb[11] = linearAccelData.acceleration.y;  // u_dot
+  fb[12] = -linearAccelData.acceleration.z; // v_dot
+  fb[12] = ros_msgs.cmdSteer.data;
+  ros_msgs.fb.data = fb;
   // Publishing messages
-  pub_fb.publish(&(ros_msgs.fb));
+  pub_fb.publish(&ros_msgs.fb);
   delay(DT);
   nh.spinOnce(); // issue services and subscribes
 }
