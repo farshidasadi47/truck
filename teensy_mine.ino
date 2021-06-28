@@ -10,9 +10,6 @@
 #include <sensor_msgs/Imu.h>       // ROS IMU message type.
 #include <std_msgs/Int32.h>        // ROS int 64
 #include <std_msgs/Float32.h>      // ROS float32 type
-#include <geometry_msgs/Point32.h> // ROS 3D vector 32 bit
-#include <std_srvs/SetBool.h>      //
-#include <std_srvs/Empty.h>        //
 // Sensor related libraries
 #include <Encoder.h>          // Encoder library, up to 100 kHz.
 #include <Servo.h>            // Servo library, for throttle and steering.
@@ -39,7 +36,7 @@
 #define _REC_ESC   15 // Throttle PWM from radio control
 #define _STEER 23     // Absolute encoder for steering 10 bit PWM
 /*========== Some constants ================================================*/
-int DT = 10;                    // Sampling period
+int DT = 8;                     // Sampling period: 8 for 50Hz ROS loop
 #define _REC_ESC_MIN 1065       // Radio control PWM range
 #define _REC_ESC_MAX 2006       //
 #define _REC_SERVO_MIN 1065     //
@@ -85,8 +82,6 @@ struct thread_ids{
   int computer;
   int neutral;
 };
-// modes of driving
-enum drive_mode{manual, computer, neutral};
 //ROS related
 struct ros_message{
   std_msgs::Float32 fl;          // front left wheel velocity
@@ -96,6 +91,7 @@ struct ros_message{
   std_msgs::Float32 steerFB;     // FB: Feedback
   std_msgs::Float32 recSteer;    // rec: receiver
   std_msgs::Float32 recThrottle;
+  std_msgs::Int32 cmdMode;      
   std_msgs::Float32 cmdSteer;    // cmd: command
   std_msgs::Float32 cmdThrottle;
   sensor_msgs::Imu imu;
@@ -104,7 +100,6 @@ struct ros_message{
 /*========== Function prototypes ===========================================*/
 // mapf: maps x from [in_min, in_max] to [out_min, out_max]
 float mapf(float x, float in_min, float in_max, float out_min, float out_max);
-void set_drive_mode(drive_mode drive_mode); // Setting current drive mode
 void wheel_inc_sens();  // Calculates wheels encoder increment.
 void imu_read();        // Reads IMU.
 void rec_esc_isr();     // Read receiver throtle PWM "on time".
@@ -114,18 +109,18 @@ void read_pwm_signal(); // Read current values of volatile variables of ISRs.
 void act_steer(float desired_rad);   // Converts desired steer angle in Rad
 void act_steer_p(float desired_rad); // Converts desired steer angle in Rad
 void act_esc(float des_vel);         // Converts throttle command in Rad/s 
-void exec_manual();   // Command execution from radio controller
-void exec_computer(); // Command execution from computer command
+void gen_command(int current_mode);  // Converts command to PWM appropriately.
 /*========== Global vars and objects ======================================*/
 // User defined
 int steer_pwm_copy;
 float steer_ang_copy;
 int rec_esc_pwm_copy;
 int rec_servo_pwm_copy;
+// Control status and commands
+int drive_mode = 0; // 1 Radio control, 2 Computer, otherwise Neutral
 int steer_cmd = _SERVO_NEUTRAL;
 int esc_cmd = _ESC_NEUTRAL;
 
-enum drive_mode mode = neutral;    // current drive mode
 s_c_p steer_calab_params;          // vehicle calibration parameters
 
 struct thread_ids t_id;            // keeping record of thread ids
@@ -155,18 +150,21 @@ ros::Publisher pub_fr("truck/fb/wheel/fr", &ros_msgs.fr);
 ros::Publisher pub_rl("truck/fb/wheel/rl", &ros_msgs.rl);
 ros::Publisher pub_rr("truck/fb/wheel/rr", &ros_msgs.rr);
 ros::Publisher pub_steerFB("truck/fb/steer", &ros_msgs.steerFB);
+ros::Publisher pub_cmdSteerfb("truck/fb/cmdsteer", &ros_msgs.cmdSteer);
 ros::Publisher pub_recSteer("truck/fb/rec/steer", &ros_msgs.recSteer);
 ros::Publisher pub_recThrottle("truck/fb/rec/throttle",&ros_msgs.recThrottle);
 ros::Publisher pub_imu("truck/fb/imu", &ros_msgs.imu);
 ros::Publisher pub_ltime("truck/fb/ltime", &ros_msgs.ltime);
 // Subscribers
+void cmdModeCb(const std_msgs::Int32 &msg){ros_msgs.cmdMode = msg;}
 void cmdSteerCb(const std_msgs::Float32 &msg){ros_msgs.cmdSteer = msg;}
 void cmdThrottleCb(const std_msgs::Float32 &msg){ros_msgs.cmdThrottle=msg;}
+ros::Subscriber<std_msgs::Int32> sub_cmdMode("truck/cmd/mode",
+                                                 &cmdModeCb);
 ros::Subscriber<std_msgs::Float32> sub_cmdSteer("truck/cmd/steer",
                                                  &cmdSteerCb);
 ros::Subscriber<std_msgs::Float32> sub_cmdThrottle("truck/cmd/throttle",
                                                     &cmdThrottleCb);
-
 /*========== Setup ========================================================*/
 void setup() {
   // Steering calibration, be carefull about these values.
@@ -176,13 +174,12 @@ void setup() {
   steer_calab_params.MIN_angle = -57*2*PI/1024;
   steer_calab_params.MAX_angle = 57*2*PI/1024;
   pinMode(17, OUTPUT);    // sets the digital pin 13 as output
-  Serial.begin(57600);
+  //Serial.begin(57600);
   steer.attach(_SERVO);
   esc.attach(_ESC);
   // Neutraling Steering and throttle.
   steer.writeMicroseconds(_SERVO_NEUTRAL);
   esc.writeMicroseconds(_ESC_NEUTRAL);
-  mode = neutral;
   // setting up PWM readers for different parts
   attachInterrupt(_REC_ESC,rec_esc_isr,CHANGE);     // reciever esc pwm
   attachInterrupt(_REC_SERVO,rec_servo_isr,CHANGE); // reciever servo pwm
@@ -195,14 +192,17 @@ void setup() {
   nh.advertise(pub_rl);
   nh.advertise(pub_rr);
   nh.advertise(pub_steerFB);
+  nh.advertise(pub_cmdSteerfb);
   nh.advertise(pub_recSteer);
   nh.advertise(pub_recThrottle);
-  nh.advertise(pub_imu);
+  //nh.advertise(pub_imu);
   nh.advertise(pub_ltime);
   // Subscribe to topics
+  nh.subscribe(sub_cmdMode);
   nh.subscribe(sub_cmdSteer);
   nh.subscribe(sub_cmdThrottle);
   // IMU initialization
+  /*
   if(bno.begin()){
     delay(1000);//wait for imu
     bno.setExtCrystalUse(true);
@@ -212,8 +212,9 @@ void setup() {
     //if not detected, give error and continue
     nh.logerror("IMU not deteced, proceeding without IMU");
   } 
+  */
   ros_msgs.imu.header.frame_id = "base_link";
-  //set_drive_mode(computer);
+  drive_mode = 2;
 }
 
 long newMillis;
@@ -222,10 +223,7 @@ int period = 20;
 float input = 0;//_ESC_NEUTRAL;
 void loop() {
   // Reading subscribers messages
-  //esc_cmd = ros_msgs.cmdSteer.data;
-  //steer_cmd = ros_msgs.cmdThrottle.data;
-  act_esc(ros_msgs.cmdThrottle.data);
-  act_steer(ros_msgs.cmdSteer.data);
+  gen_command(ros_msgs.cmdMode.data);
   // Timing
   newMillis = millis();
   period = max(newMillis - oldMillis,1);
@@ -243,49 +241,49 @@ void loop() {
   pub_rl.publish(&ros_msgs.rl);
   pub_rr.publish(&ros_msgs.rr);
   pub_ltime.publish(&ros_msgs.ltime);
-  
+
   // Reading IMU
   ros_msgs.imu.orientation.x = orientationData.orientation.x*deg2rad;
-  ros_msgs.imu.orientation.y = orientationData.orientation.y*deg2rad;
+  ros_msgs.imu.orientation.y = -orientationData.orientation.y*deg2rad;
   ros_msgs.imu.orientation.z = orientationData.orientation.z*deg2rad;
   ros_msgs.imu.angular_velocity.x = -deg2rad*angVelocityData.gyro.x;
-  ros_msgs.imu.angular_velocity.y = -deg2rad*angVelocityData.gyro.y;
+  ros_msgs.imu.angular_velocity.y = deg2rad*angVelocityData.gyro.y;
   ros_msgs.imu.angular_velocity.z = -deg2rad*angVelocityData.gyro.z;
   ros_msgs.imu.linear_acceleration.x = linearAccelData.acceleration.x;
   ros_msgs.imu.linear_acceleration.y = linearAccelData.acceleration.y;
   ros_msgs.imu.linear_acceleration.z = linearAccelData.acceleration.z;
   ros_msgs.imu.header.stamp = nh.now();
   // Publishing IMU
-  pub_imu.publish(&ros_msgs.imu);
+  //pub_imu.publish(&ros_msgs.imu);
   
   // Reading PWM signals: receiver commands and steer encoder
   read_pwm_signal();
-  ros_msgs.steerFB.data = steer_ang_copy;
+  ros_msgs.steerFB.data = -steer_ang_copy; // Comply with ROS program
   ros_msgs.recSteer.data = rec_servo_pwm_copy;
   ros_msgs.recThrottle.data = rec_esc_pwm_copy;
   // Publishing the PWM sensory feedback
   pub_steerFB.publish(&ros_msgs.steerFB);
   pub_recSteer.publish(&ros_msgs.recSteer);
   pub_recThrottle.publish(&ros_msgs.recThrottle);
+  pub_cmdSteerfb.publish(&ros_msgs.cmdSteer);
  
   /*
   // Receiver
   if (Serial.available()>0){
     input = Serial.parseFloat('\n');
   }*/
-  //act_steer(input);
-  //act_esc(input);
-  
+  /*
   char str[80];
-  /*sprintf(str, "%+06.2f %+06.2f %+06.2f",
+  sprintf(str, "%+06.2f %+06.3f %+06.2f",
           ros_msgs.imu.orientation.x,
           ros_msgs.imu.orientation.y,
-          ros_msgs.imu.orientation.z);*/
+          ros_msgs.imu.orientation.z);
+          */
   
-  sprintf(str, "%+06.2f %+06.2f %+06.2f",
+  /*sprintf(str, "%+06.2f %+06.2f %+06.2f",
           ros_msgs.imu.angular_velocity.x,
           ros_msgs.imu.angular_velocity.y,
-          ros_msgs.imu.angular_velocity.z);
+          ros_msgs.imu.angular_velocity.z);*/
   /*
   sprintf(str, "%+06.2f %+06.2f %+06.2f",
           ros_msgs.imu.linear_acceleration.x,
@@ -299,7 +297,13 @@ void loop() {
   //Serial.println(rec_servo_pwm_copy);
   //Serial.println(steer_pwm_copy);
  
-  //digitalWrite(17, !digitalRead(17));
+  digitalWrite(17, !digitalRead(17));
+  //Serial.print(str);
+  //Serial.print("  ");
+  /*sprintf(str, "%+06.2f %+06.2f %+06.2f",
+          ros_msgs.imu.linear_acceleration.x,
+          ros_msgs.imu.linear_acceleration.y,
+          ros_msgs.imu.linear_acceleration.z);*/
   //Serial.println(str);
   esc.writeMicroseconds(esc_cmd);
   steer.writeMicroseconds(steer_cmd);
@@ -317,61 +321,48 @@ float mapf(float x, float in_min, float in_max, float out_min, float out_max)
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-// Sets current driving mode of the vehicle
-// Input:  desired mode
+// Converts commands to appropriate PWM in each deriving mode
+// Input:  current mode
 // Output: None
-void set_drive_mode(enum drive_mode desired_mode){
-  // Terminate the current driving mode
-  switch(mode){
-    case manual:
-      threads.kill(t_id.manual);
+void gen_command(int current_mode){
+  static int prev_mode = 0; // storing previous mode
+  switch(current_mode){
+    case 2:
+      // Control by computer
+      //nh.loginfo("Computer mode.");
+      act_steer_p(-ros_msgs.cmdSteer.data); // To comply with ROS program
+      act_esc(ros_msgs.cmdThrottle.data);
+      prev_mode = 2;
+      break;
+    case 1:
+      // Control by radio controller
+      //nh.loginfo("Radio control mode.");
+      steer_cmd = rec_servo_pwm_copy; // To comply with ROS program
+      esc_cmd = rec_esc_pwm_copy;
+      prev_mode = 1;
+      break;
+    case 0:
+      //nh.loginfo("Neutral mode.");
       steer_cmd = _SERVO_NEUTRAL;
+      if(prev_mode){ // Brakes before going to neutral
+      act_esc(0);
+      if(!(wheel_inc.RR + wheel_inc.RL)){prev_mode = 0;} 
+      }else{
       esc_cmd = _ESC_NEUTRAL;
+      prev_mode = 0;
+      }
       break;
-    case computer:
-      threads.kill(t_id.computer);
+    default:
       steer_cmd = _SERVO_NEUTRAL;
+      if(prev_mode){ // Brakes before going to neutral
+      act_esc(0);
+      if(!(wheel_inc.RR + wheel_inc.RL)){prev_mode = 0;} 
+      }else{
       esc_cmd = _ESC_NEUTRAL;
+      prev_mode = 0;
+      }
       break;
-    case neutral:
-      break;
-     default:
-       break;
   }
-  // Command neutral value to steering servo and throttle.
-  esc.writeMicroseconds(_ESC_NEUTRAL);
-  steer.writeMicroseconds(_SERVO_NEUTRAL);
-  // Set driving mode to the current desired one.
-  switch(desired_mode){
-   case manual:
-     mode = manual;
-     t_id.manual = threads.addThread(exec_manual);
-     break;
-   case computer:
-     mode = computer;
-     t_id.computer = threads.addThread(exec_computer);
-     break;
-   case neutral:
-     mode = neutral;
-     break;
-  }
-}
-
-// Command execution from radio controller
-// Input: None
-// Output: None
-void exec_manual(){
-  steer_cmd = rec_servo_pwm_copy;
-  esc_cmd = rec_esc_pwm_copy;
-  threads.delay(DT); //100 hz loop
-}
-// Command execution from computer command
-// Input: None
-// Output: None
-void exec_computer(){
-  //act_steer(ros_msgs.cmdSteer.data);
-  //act_esc(ros_msgs.cmdThrottle.data);
-  threads.delay(DT); //100 hz loop
 }
 // Reading encoder increments with main loop frequency
 // Input: None
@@ -404,7 +395,7 @@ void imu_read(){
     bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
     bno.getEvent(&angVelocityData, Adafruit_BNO055::VECTOR_GYROSCOPE);
     bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
-    threads.delay(12); //83 hz loop
+    threads.delay(DT); //83 hz loop
   }
 }
 // Reads current values of volatile variables of ISRs
@@ -477,20 +468,22 @@ void act_steer(float desired_rad){
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer_p(float desired_rad){
-  float kp = 100.0/57; // Setting KP = 0, removes the P control
+  static int errorp = 0;
+  float kp = 200.0/57; // Setting KP = 0, removes the P control
+  float kd = 1;       // Setting KD = 0, removed D control
   int desired_enc = steer_calab_params.CENT_pwm - int(desired_rad*rad2enc);
   int constant_cmd = _SERVO_NEUTRAL + int(desired_rad*rad2enc*5.218);
   int error = steer_pwm_copy - desired_enc;
-  steer_cmd = max(1100, min(constant_cmd + int(kp*error),2100));
+  float derror = error - errorp;
+  steer_cmd = max(1050, min(constant_cmd + int(kp*error) + int(kd*derror),2150));
 }
 // ESC PID
 // Input: Desired main shaft velocity Rad/s
 // Output: None
 void act_esc(float des_vel){
   static bool nonzeroflag = true;
-  static float sum = 0;
   float vel = 0.5*(wheel_inc.RL + wheel_inc.RR)*speed_ratio/period;
-  des_vel = des_vel + max(-10,min(10*(des_vel-vel),10));
+  des_vel = des_vel + max(-6,min(50*(des_vel-vel),6));
   if(vel!=0){
     if(vel*des_vel<=0){
       // Breaking
@@ -512,9 +505,9 @@ void act_esc(float des_vel){
       nonzeroflag = false;
     }
   }
-  int cmd_final = _ESC_NEUTRAL + int(des_vel*_M_ESC_RAD_S);
+  // int cmd_final = _ESC_NEUTRAL + int(des_vel*_M_ESC_RAD_S);
   // cubic fitting
-  /*int cmd_final = int(1.943e-4*des_vel*des_vel*des_vel
-                      - 1.895e-3*des_vel*des_vel+4.238*des_vel+_ESC_NEUTRAL);*/
+  int cmd_final = int(1.943e-4*des_vel*des_vel*des_vel
+                      - 1.895e-3*des_vel*des_vel+4.238*des_vel+_ESC_NEUTRAL);
   esc_cmd = max(_ESC_MIN,min(cmd_final,_ESC_MAX));
 }
