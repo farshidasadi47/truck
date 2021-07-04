@@ -38,13 +38,13 @@
 #define _REC_ESC   15 // Throttle PWM from radio control
 #define _STEER 23     // Absolute encoder for steering 10 bit PWM
 /******************* Some constants *******************************************/
-int DT = 5;                     // Sampling period: 14 for 50Hz ROS loop
+int DT = 6;                     // Sampling period: 14 for 50Hz ROS loop
 #define _REC_ESC_MIN 1065       // Radio control PWM range
 #define _REC_ESC_MAX 2006       //
 #define _REC_SERVO_MIN 1065     //
 #define _REC_SERVO_MAX 2006     //
 const int _ESC_NEUTRAL = 1514;      //
-const int _SERVO_NEUTRAL = 1610;    //
+const int _SERVO_NEUTRAL = 1640;    //
 const int _ESC_MIN = 1000;          // min ESC_PWM_micros
 const int _ESC_MAX = 2000;
 // max ESC_PWM_micros 
@@ -65,13 +65,13 @@ struct isr_variables{
   volatile float steering_angle;
 };
 // Steering_Calibration_parameter
-struct s_c_p{
+struct s_c_p{// precision of the encoder is ~ 2p/1024 = 0.006 rad = 0.35 deg
   // Range of PWM is about 114 microseconds
-  int MIN_pwm;   // 530
-  int MAX_pwm;   // 644
-  int CENT_pwm;  // 587
-  float MIN_angle; // -20.039 Deg or -57*2*PI/1024 Rad
-  float MAX_angle; // 20.039 Deg or 57*2*PI/1024 Rad
+  int MIN_pwm;   // 699
+  int MAX_pwm;   // 815
+  int CENT_pwm;  // 757
+  float MIN_angle; // -20.7422 Deg or -58*2*PI/1024 Rad or -0.362
+  float MAX_angle; // 20.7422 Deg or 58*2*PI/1024 Rad ot 0.362
 }; 
 // Encoder increments
 struct wheel_inc_struct{
@@ -166,11 +166,11 @@ ros::Subscriber<std_msgs::Float32> sub_cmdThrottle("truck/cmd/throttle",
 /******************* Setup ****************************************************/
 void setup() {
   // Steering calibration, be carefull about these values.
-  steer_calab_params.MIN_pwm = 530;
-  steer_calab_params.MAX_pwm = 644;
-  steer_calab_params.CENT_pwm = 587;
-  steer_calab_params.MIN_angle = -57*2*PI/1024;
-  steer_calab_params.MAX_angle = 57*2*PI/1024;
+  steer_calab_params.MIN_pwm = 699;
+  steer_calab_params.MAX_pwm = 815;
+  steer_calab_params.CENT_pwm = 757;
+  steer_calab_params.MIN_angle = -58*2*PI/1024;
+  steer_calab_params.MAX_angle = 58*2*PI/1024;
   steer.attach(_SERVO);
   esc.attach(_ESC);
   // Neutraling Steering and throttle.
@@ -211,7 +211,6 @@ int period = 20;
 void loop() {
   // Reading subscribers messages
   gen_command(ros_msgs.cmdMode.data);
-  // Executing commnands
   esc.writeMicroseconds(esc_cmd);
   steer.writeMicroseconds(steer_cmd);
   // Timing
@@ -226,7 +225,7 @@ void loop() {
   fb[3] = wheel_inc.RR*speed_ratio/period;
   // Reading PWM signals: receiver commands and steer encoder
   read_pwm_signal();
-  fb[4] = -steer_ang_copy; // Comply with ROS program
+  fb[4] = steer_ang_copy;
   fb[5] = rec_servo_pwm_copy;
   fb[6] = rec_esc_pwm_copy;
   // Reading IMU
@@ -262,7 +261,7 @@ void gen_command(int current_mode){
     case 2:
       // Control by computer
       //nh.loginfo("Computer mode.");
-      act_steer_p(-ros_msgs.cmdSteer.data); // To comply with ROS program
+      act_steer_p(ros_msgs.cmdSteer.data);
       act_esc(ros_msgs.cmdThrottle.data);
       prev_mode = 2;
       break;
@@ -303,19 +302,22 @@ void act_steer(float desired_rad){
   //static int error_sum = 0;
   int desired_enc = int(rad2enc*desired_rad);
   steer_cmd = _SERVO_NEUTRAL+int(desired_enc*5.218);
+  steer_cmd = max(1200,min(steer_cmd,2000)); // for savox
 }
 // Steer PID
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer_p(float desired_rad){
-  static int errorp = 0;
-  float kp = 200.0/57; // Setting KP = 0, removes the P control
-  float kd = 1;       // Setting KD = 0, removed D control
-  int desired_enc = steer_calab_params.CENT_pwm - int(desired_rad*rad2enc);
+  static float errorsum = 0;
+  float kp = 400.0; // Setting KP = 0, removes the P control
+  float ki = 75;       // Setting Kp = 0, removed I control
   int constant_cmd = _SERVO_NEUTRAL + int(desired_rad*rad2enc*5.218);
-  int error = steer_pwm_copy - desired_enc;
-  float derror = error - errorp;
-  steer_cmd = max(1050, min(constant_cmd + int(kp*error) + int(kd*derror),2150));
+  float error = desired_rad - steer_ang_copy;
+  errorsum += error;
+  errorsum = max(-.35,min(errorsum,.35)); // clamping integral error sum
+  int var_cmd = max(-300,min(int(kp*error + ki*errorsum),300));
+  //steer_cmd = max(1050, min(constant_cmd + var_cmd,2150));   // shitty servo
+  steer_cmd = max(1200, min(constant_cmd + var_cmd,2200));   // savox
 }
 // ESC PID
 // Input: Desired main shaft velocity Rad/s
@@ -323,7 +325,7 @@ void act_steer_p(float desired_rad){
 void act_esc(float des_vel){
   static bool nonzeroflag = true;
   float vel = 0.5*(wheel_inc.RL + wheel_inc.RR)*speed_ratio/period;
-  des_vel = des_vel + max(-6,min(50*(des_vel-vel),6));
+  des_vel = des_vel + max(-10,min(75*(des_vel-vel),10));
   if(vel!=0){
     if(vel*des_vel<=0){
       // Breaking
@@ -429,7 +431,7 @@ void read_pwm_signal(){
   rec_esc_pwm_copy = isr_vars.rec_esc_pwm;
   rec_servo_pwm_copy = isr_vars.rec_servo_pwm;
   interrupts();
-  steer_ang_copy = (steer_calab_params.CENT_pwm - steer_pwm_copy)/rad2enc;
+  steer_ang_copy = (steer_pwm_copy - steer_calab_params.CENT_pwm )/rad2enc;
 }
 // Reading IMU
 // Input:  None
