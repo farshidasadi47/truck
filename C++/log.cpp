@@ -88,6 +88,7 @@ struct ros_message ros_msgs;
 rosbag::Bag bag;
 ros::Time ros_time;
 float fb[fb_size];
+const float steer_range = 0.3436;
 // modes of driving
 enum drive_mode{manual, computer, neutral};
 // car specs
@@ -541,8 +542,6 @@ void ground_dynamic_control(std::vector<std::vector<float>> points){
   float c_f = params.c_f;
   // velocity control variables
   float u = ros_msgs.gVelo.x;         // current longitudinal velocity
-  float v = ros_msgs.gVelo.y;         // current lateral velocity
-  float dpsi = ros_msgs.gW.z;    // current vehicle body heading
   float u0 = u<1? 1:u;                // modified longitudinal velocity to avoid zero division
   float ud = 1.8;                     // desired velocity
   float eu = u - ud;                  // velocity error
@@ -568,6 +567,8 @@ void ground_dynamic_control(std::vector<std::vector<float>> points){
   ros_msgs.t2Pos.x = LG[3]; ros_msgs.t2Pos.y = LG[4]; ros_msgs.t2Pos.z = LG[5];
   // states
   float d = 0.8;                    // look ahead error
+  float v = ros_msgs.gVelo.y;         // current lateral velocity
+  float dpsi = ros_msgs.gW.z;    // current vehicle body heading
   float e = LG[5];                  // current lateral error
   static float ep = e;              // past lateral error
   float de = (e - ep)/duration;     // current lateral error rate
@@ -581,20 +582,22 @@ void ground_dynamic_control(std::vector<std::vector<float>> points){
   float k = LG[3];                  // path curvature
   float dpsir = u*k/(1-k*e);        // path heading rate
   // Lateral control
-  float ks =2;
+  float ks = 2;
   float kds = 0;
   float steer;
-  steer = -ks*el - kds*del + (m*iz/(c_f*(iz+m*d*l)))*
-         ( c_f*(1/m+d*l/iz)*((v+l*dpsi)/u0)
-          +c_r*(1/m-d*l/iz)*((v-l*dpsi)/u0) + u*dpsir);
-  //steer = -ks*el - kds*del;
+  steer = -ks*el - kds*del + (m*iz/(c_f*(iz+m*d*l)))*(
+           c_f*(1/m+d*l/iz)*(v+l*dpsi)/u0
+          +c_r*(1/m-d*l/iz)*(v-l*dpsi)/u0 + u*dpsir);
+  steer = -ks*el - kds*del;
   // Clamping steering values
   steer = std::max((float)-0.3436,std::min(steer,(float)0.3436));
   // Update ros message
   ros_msgs.cmdSteer.data = steer;
-  ROS_INFO("%+07.3f,%+07.3f", -ks*el - kds*del, (m*iz/(c_f*(iz+m*d*l)))*
-         ( c_f*(1/m+d*l/iz)*((v+l*dpsi)/u0)
-          +c_r*(1/m-d*l/iz)*((v-l*dpsi)/u0) + u*dpsir));
+  ROS_INFO("%+07.3f,%+07.3f", -ks*el - kds*del, 
+  (m*iz/(c_f*(iz+m*d*l)))*(
+           c_f*(1/m+d*l/iz)*(v+l*dpsi)/u0
+          +c_r*(1/m-d*l/iz)*(v-l*dpsi)/u0 + u*dpsir)
+  );
   
 }
 
@@ -609,6 +612,7 @@ void flight_geometric_control(std::vector<std::vector<float>> points){
     elapsed = 0;
     flag = true;
   }
+  if(ros_msgs.cmdMode.data ==2){elapsed +=.02;}
   // parameters of car
   float g = params.g;
   float R = params.R;
@@ -616,95 +620,90 @@ void flight_geometric_control(std::vector<std::vector<float>> points){
   float l = params.l;
   float iz = params.iz;
   float ix = params.ix;
-  float alpha_0 = params.alpha_0;
+  float a0 = params.alpha_0;
   float r = params.r;
   float c_r = params.c_r;
   float c_s = params.c_s;
   float c_f = params.c_f;
-  // states for point o
+  // velocity control
   float steerfb = ros_msgs.fb.data[4]; // current steering angle
-  float u = ros_msgs.oVelo.x; // current longitudinal velocity
-  float us = u;               // velocity to be fed into steering control
-  float v = ros_msgs.gVelo.y; // current lateral velocity
+  float u = ros_msgs.oVelo.x;          // current longitudinal velocity
+  float u0 = u<1? 1:u;                 // velocity to be fed into steering control
+  float ud = 2;                        // desired velocity
+  float eu = u - ud;                   // velocity error
+  static float eus = 0;                // sum of velocity error
+  eus += eu;                           // Updating error sum
+  eus = std::max((float)-2,std::min(eus,(float)2)); // Clamping error summation, anti wind up action
+  // longitudinal velocity control
+  float ku = 0;                          // P gain  
+  float kiu = 0;                         // I gain
+  float throttle;                        // command
+  throttle = 1.12*ud/R - ku*eu -kiu*eus; 
+  // Clamping command
+  throttle = std::max((float)-80,std::min(throttle,(float)80));
+  // Update ros message
+  ros_msgs.cmdThrottle.data = throttle;
+  // Lateral and roll control
+  float v = ros_msgs.oVelo.y; // current lateral velocity
   float dpsi = ros_msgs.gW.z; // current yaw rate
   float alpha = ros_msgs.gOrient.x; // current roll
   float dalpha = ros_msgs.gW.x;     // current roll rate
-  float e_alpha;                    // roll error
-  // desired 
-  static float ud = 2;     // desired velocity
-  float ue = u - ud;       // velocity error
-  static float ue_sum = 0; // sum of velocity error
-  ue_sum += ue;            // updating sum of error
-  ue_sum = std::max((float) 2,std::min(ue_sum,(float)2));
+  float ea;                    // roll error
   // path tracking states
   // getting point O data with respect to path
-  std::vector<float> X = {0,0,0};         // [X,Y,psi]
-  std::vector<float> XP = {0,0,0};        // look ahead point
-  std::vector<float> L = {0,0,0,0,0,0};   // [X,Y, psir, k, s, ey], path.points
-  static  std::vector<float> L_p = {0,0,0,0,0,0}; // past [X,Y, psir, k, s, ey], path.points
-  X = {ros_msgs.oPos.x, ros_msgs.oPos.y, ros_msgs.gOrient.z};   // [X, Y, psi]
-  L = get_nn(points,X); // [X, Y, psir, k, s, ey]: path.points
-  ros_msgs.t1Pos.x = L[0]; ros_msgs.t1Pos.y = L[1]; ros_msgs.t1Pos.z = L[2];
-  ros_msgs.t2Pos.x = L[3]; ros_msgs.t2Pos.y = L[4]; ros_msgs.t2Pos.z = L[5];
+  // global position and orientation [X,Y,psi]
+  std::vector<float> XO = {ros_msgs.oPos.x, ros_msgs.oPos.y,ros_msgs.gOrient.z};
+  // local position with respect to track
+  std::vector<float> LO = get_nn(points,XO); // [X, Y, psir, k, s, ey]: path.points
+  // Updating corresponding ros message
+  ros_msgs.t1Pos.x = LO[0]; ros_msgs.t1Pos.y = LO[1]; ros_msgs.t1Pos.z = LO[2];
+  ros_msgs.t2Pos.x = LO[3]; ros_msgs.t2Pos.y = LO[4]; ros_msgs.t2Pos.z = LO[5];
   // path vars
-  float ey = L[5];                      // current lateral error
-  static float ey_p = ey;               // past lateral error
-  float d = 0.6;                        // look ahead distance (c_f + c_r)/(2/k)
-  float el = ey + d*sin(X[2] - L[2]);   // look ahead error
-  static float el_p = el;               // past look ahead error
-  float psir = L[2];                    // path heading
-  static float psir_p = psir;           // past path heading
-  float k = L[3];                       // current path curvature
-  float dpsir = 1-k*ey ? k*u/(1-k*ey): 0; // current path heading rate
-  float dey = (ey - ey_p)/duration;     // current lateral error rate
-  float del = (el-el_p)/duration;       // current lateral error of look ahead point rate
-  ey_p = ey;
-  el_p = el;
-  L_p = L;
+  float e = LO[5];                      // current lateral error
+  static float ep = e;                  // past lateral error
+  float d = 0.8;                        // look ahead distance (c_f + c_r)/(2/k)
+  float psi = XO[2];                    // current vehicle body heading
+  float psir = LO[2];                   // current path heading
+  float el = e + d*sin(psi - psir);     // current look ahead error
+  static float elp = el;                // past look ahead error
+  static float psirp = psir;            // past path heading
+  float k = LO[3];                      // current path curvature
+  float dpsir = 1-k*e ? k*u/(1-k*e): 0; // current path heading rate
+  float de = (e - ep)/duration;         // current lateral error rate
+  float del = (el-elp)/duration;        // current lateral error of look ahead point rate
+  ep = e;                               // Updating past values
+  elp = el;
   // roll desired
-  float alpha_e;
-  // commands
-  float throttle;
-  float steer;
+  float ad;
   // quasi command
   float steer_e = 0;
-  // longitudinal velocity control parameters
-  float ku = 5;
   // lateral control parameters
   float ke = 2;
   float kde = 0;
   // roll control parameters
   float ka = 2;
   float kda = 0;
-  // roll and lateral control
-  if(us<.5){us = .5;}
   // Simple geometric model
   // quasi lateral control
   steer_e = -ke*el-kde*del + u*dpsir;
-  steer_e = std::max((float)-0.3436*u*u/(2*l*cos(alpha)),
+  /*steer_e = std::max((float)-0.3436*u*u/(2*l*cos(alpha)),
                      std::min(steer_e,(float)0.3436*u*u/(2*l*cos(alpha)))
-                    );
+                    );*/
   // bem calculation
-  alpha_e = steer_e ? atan(g/steer_e) - alpha_0: M_PI/2-alpha_0;
-  e_alpha = alpha - alpha_e;
+  ad = steer_e ? atan(g/steer_e) - a0: M_PI/2-a0;
+  ea = alpha - ad;
   // main control
-  steer = 2*l*cos(alpha)*(ix + m*r*r)/(m*r*sin(alpha + alpha_0)*us*us)*(
-    m*r*g*cos(alpha + alpha_0)-ka*e_alpha-kda*dalpha);
-  steer = std::max((float)-0.3436,std::min(steer,(float)0.3436));
+  float steer;
+  steer = 2*l*cos(alpha)*(ix + m*r*r)/(m*r*sin(alpha + a0)*u0*u0)*(
+    m*r*g*cos(alpha + a0)-ka*ea-kda*dalpha);
+  // Clamping steering value
+  steer = std::max(-steer_range,std::min(steer,steer_range));
   // Update ros message
   ros_msgs.cmdSteer.data = steer;
   
-  // velocity control
-  // simple P control based on linear dynamics
-  throttle = ud/R - ku*(u-ud);// - kd_u*du;
-  // saturate values
-  throttle = std::max((float)-80,std::min(throttle,(float)80));
-  // Update ros message
-  ros_msgs.cmdThrottle.data = throttle;
-  if(ros_msgs.cmdMode.data ==2){elapsed +=.02;}
   // activation flag
   if(flag && ros_msgs.cmdMode.data ==2){
-    if(L[4] >0.5 && L[4]<1){flag = false;}
+    if(LO[4] >0.5 && LO[4]<1){flag = false;}
   }
   if(flag){ros_msgs.cmdThrottle.data = 5;}
 }
