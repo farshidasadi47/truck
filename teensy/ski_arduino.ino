@@ -44,11 +44,11 @@ int DT = 6;                     // Sampling period: 14 for 50Hz ROS loop
 #define _REC_SERVO_MIN 1065     //
 #define _REC_SERVO_MAX 2006     //
 const int _ESC_NEUTRAL = 1514;      //
-const int _SERVO_NEUTRAL = 1640;    //
+const int _SERVO_NEUTRAL = 1670;    //
 const int _ESC_MIN = 1000;          // min ESC_PWM_micros
 const int _ESC_MAX = 2000;
 // max ESC_PWM_micros 
-const float _M_ESC_RAD_S = 5.228; // ESC_PWM_micros = M_ESC* {Rad/s} + B_ESC
+const float _M_ESC_RAD_S = 5.218*1.1; // ESC_PWM_micros = M_ESC* {Rad/s} + B_ESC
 const float _B_ESC_RAD_S = 1514;    //
 const float _M_ESC_RPM = 0.59299;   // ESC_PWM_micros = M_ESC* {RPM} + B_ESC
 const float _B_ESC_RPM = 1514;      //
@@ -67,11 +67,11 @@ struct isr_variables{
 // Steering_Calibration_parameter
 struct s_c_p{// precision of the encoder is ~ 2p/1024 = 0.006 rad = 0.35 deg
   // Range of PWM is about 114 microseconds
-  int MIN_pwm;   // 699
-  int MAX_pwm;   // 815
-  int CENT_pwm;  // 757
-  float MIN_angle; // -20.7422 Deg or -58*2*PI/1024 Rad or -0.362
-  float MAX_angle; // 20.7422 Deg or 58*2*PI/1024 Rad ot 0.362
+  int MIN_pwm;   // 573
+  int MAX_pwm;   // 687
+  int CENT_pwm;  // 630
+  float MIN_angle; // -20.7422 Deg or -57*2*PI/1024 Rad or -0.362
+  float MAX_angle; // 20.7422 Deg or 57*2*PI/1024 Rad ot 0.362
 }; 
 // Encoder increments
 struct wheel_inc_struct{
@@ -166,11 +166,11 @@ ros::Subscriber<std_msgs::Float32> sub_cmdThrottle("truck/cmd/throttle",
 /******************* Setup ****************************************************/
 void setup() {
   // Steering calibration, be carefull about these values.
-  steer_calab_params.MIN_pwm = 699;
-  steer_calab_params.MAX_pwm = 815;
-  steer_calab_params.CENT_pwm = 757;
-  steer_calab_params.MIN_angle = -58*2*PI/1024;
-  steer_calab_params.MAX_angle = 58*2*PI/1024;
+  steer_calab_params.MIN_pwm = 621;
+  steer_calab_params.MAX_pwm = 735;
+  steer_calab_params.CENT_pwm = 678;
+  steer_calab_params.MIN_angle = -57*2*PI/1024;
+  steer_calab_params.MAX_angle = 57*2*PI/1024;
   steer.attach(_SERVO);
   esc.attach(_ESC);
   // Neutraling Steering and throttle.
@@ -299,25 +299,35 @@ void gen_command(int current_mode){
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer(float desired_rad){
-  //static int error_sum = 0;
+  float ang_range = 1.2*steer_calab_params.MAX_angle; // Max steering range*1.2
+  desired_rad = max(-ang_range,min(desired_rad,ang_range));
   int desired_enc = int(rad2enc*desired_rad);
-  steer_cmd = _SERVO_NEUTRAL+int(desired_enc*5.218);
-  steer_cmd = max(1200,min(steer_cmd,2000)); // for savox
+  steer_cmd = _SERVO_NEUTRAL+int(desired_enc*5.9494);
+  //steer_cmd = max(1300,min(steer_cmd,2100)); // for savox [1320,2020]
+  // steer_pwm = 5.9494 * enc_pwm - 2077.5848
 }
 // Steer PID
 // Input: Desired steering angle in Rad
 // Output: None
-void act_steer_p(float desired_rad){
-  static float errorsum = 0;
-  float kp = 400.0; // Setting KP = 0, removes the P control
-  float ki = 75;       // Setting Kp = 0, removed I control
-  int constant_cmd = _SERVO_NEUTRAL + int(desired_rad*rad2enc*5.218);
-  float error = desired_rad - steer_ang_copy;
-  errorsum += error;
-  errorsum = max(-.35,min(errorsum,.35)); // clamping integral error sum
-  int var_cmd = max(-300,min(int(kp*error + ki*errorsum),300));
-  //steer_cmd = max(1050, min(constant_cmd + var_cmd,2150));   // shitty servo
-  steer_cmd = max(1200, min(constant_cmd + var_cmd,2200));   // savox
+void act_steer_p(float ang_des){
+  float ang_range = steer_calab_params.MAX_angle; // Max steering range
+  float ang = steer_ang_copy;                 // Current steering angle
+  static float ang_past = ang;                // Past steering angle
+  float error = ang_des - ang;                // Current error
+  ang_past = ang;                             // Updating past angle
+  static float errorsum = 0;                  // Sum of errors
+  errorsum += error;                          // Updating error sum
+  errorsum = max(-.4,min(errorsum,0.4));    // Clamping integral error
+  float ang_vel_m = (ang - ang_past)*1000/DT; // Steering angular velocity
+  float ang_vel_f = ang_vel_m;                // Filterred
+  // PID gains
+  float kp = 0; // Setting KP = 0, removes the P control
+  float ki = 0.12;   // Setting Kp = 0, removed I control
+  float kd = 0.02;   // Setting Kd = 0, removes D gain10  
+  // Commanded angle from PID
+  float ang_c = ang_des + kp*error + ki*errorsum - kd*ang_vel_f;  // PID
+  ang_c = max(-ang_range*1.1,min(ang_c,ang_range*1.1)); // Clamping, 120%
+  steer_cmd = _SERVO_NEUTRAL + int(ang_c*rad2enc*5.9494);
 }
 // ESC PID
 // Input: Desired main shaft velocity Rad/s
