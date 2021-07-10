@@ -338,19 +338,19 @@ void update_states(){
   tf2::convert(ros_msgs.vicon.transform.rotation, vicon_quat);
   // Update orientation angles and store in global vars
   tf2::Matrix3x3(vicon_quat).getRPY(rolld,pitchd,yawd); // alpha, ~, yaw
-  roll = round((float)rolld*1000.0)/1000.0;
-  pitch = round( wrap((float)pitchd) *1000.0)/1000.0;
-  yaw = round( wrap((float)yawd) *1000.0)/1000.0;
+  roll = (float)rolld;
+  pitch = wrap((float)pitchd);
+  yaw = wrap((float)yawd);
   ros_msgs.gOrient.x = roll; ros_msgs.gOrient.y = pitch; ros_msgs.gOrient.z = yaw;
   // Calculate angular derivatives and store in global vars
-  droll = round( ros_msgs.fb.data[9] *1000.0)/1000.0;//(roll-roll_p)/duration;
-  dpitch = round( (pitch-pitch_p)/duration *1000.0)/1000.0;
-  dyaw = round( ros_msgs.fb.data[10] *1000.0)/1000.0;//(yaw-yaw_p)/duration;
+  droll = ros_msgs.fb.data[9];//(roll-roll_p)/duration;
+  dpitch = (pitch-pitch_p)/duration;
+  dyaw = ros_msgs.fb.data[10];//(yaw-yaw_p)/duration;
   ros_msgs.gW.x = droll; ros_msgs.gW.y = dpitch; ros_msgs.gW.z = dyaw;
   // Calculate angular acceleration
-  ddroll = round( (droll-droll_p)/duration *1000.0)/1000.0;
-  ddpitch = round( (dpitch-dpitch_p)/duration *1000.0)/1000.0;
-  ddyaw = round( (dyaw-dyaw_p)/duration *1000.0)/1000.0;
+  ddroll = (droll-droll_p)/duration;
+  ddpitch = (dpitch-dpitch_p)/duration;
+  ddyaw = (dyaw-dyaw_p)/duration;
   ros_msgs.gDW.x = ddroll; ros_msgs.gDW.y = ddpitch; ros_msgs.gDW.z = ddyaw;
   // Update past rotations and its derivatives
   roll_p = roll;
@@ -360,40 +360,40 @@ void update_states(){
   dpitch_p = dpitch;
   dyaw_p = dyaw;
   // Update CoM global position
-  XG = round( ros_msgs.vicon.transform.translation.x *1000.0)/1000.0;
-  YG = round( ros_msgs.vicon.transform.translation.y *1000.0)/1000.0;
-  ZG = round( ros_msgs.vicon.transform.translation.z *1000.0)/1000.0;
+  XG = ros_msgs.vicon.transform.translation.x;
+  YG = ros_msgs.vicon.transform.translation.y;
+  ZG = ros_msgs.vicon.transform.translation.z;
   ros_msgs.gPos.x = XG; ros_msgs.gPos.y = YG; ros_msgs.gPos.z = ZG;
   // Update O global position, PO = PG - r_G
-  XO = round( (XG + params.r*cos(roll+params.alpha_0)*sin(yaw)) *1000.0)/1000.0;
-  YO = round( (YG - params.r*cos(roll+params.alpha_0)*cos(yaw)) *1000.0)/1000.0;
-  ZO = round( (-params.r*sin(roll+params.alpha_0)) *1000.0)/1000.0;
+  XO = (XG + params.r*cos(roll+params.alpha_0)*sin(yaw));
+  YO = (YG - params.r*cos(roll+params.alpha_0)*cos(yaw));
+  ZO = (-params.r*sin(roll+params.alpha_0));
   ros_msgs.oPos.x = XO; ros_msgs.oPos.y = YO; ros_msgs.oPos.z = ZO;
   // Calculate and update CoM velocities global 
-  DXG = round( (XG-XG_p)/duration *1000.0)/1000.0;
-  DYG = round( (YG-YG_p)/duration *1000.0)/1000.0;
-  DZG = round( (ZG-ZG_p)/duration *1000.0)/1000.0;
+  DXG = (XG-XG_p)/duration;
+  DYG = (YG-YG_p)/duration;
+  DZG = (ZG-ZG_p)/duration;
   // Filter values for control purposes
   //DXG = filter_DXG.filter(DXG);
   //DYG = filter_DYG.filter(DYG);
   ros_msgs.gVel.x = DXG; ros_msgs.gVel.y = DYG; ros_msgs.gVel.z = DZG;
   // Calculate and update CoM accelerations global 
-  DDXG = round( (DXG-DXG_p)/duration *1000.0)/1000.0;
-  DDYG = round( (DYG-DYG_p)/duration *1000.0)/1000.0;
-  DDZG = round( (DZG-DZG_p)/duration *1000.0)/1000.0;
+  DDXG = (DXG-DXG_p)/duration;
+  DDYG = (DYG-DYG_p)/duration;
+  DDZG = (DZG-DZG_p)/duration;
   ros_msgs.gAcc.x = DDXG; ros_msgs.gAcc.y = DDYG; ros_msgs.gAcc.z = DDZG;
   // Calculate and update O velocities global 
-  DXO = round( (XO-XO_p)/duration *1000.0)/1000.0;
-  DYO = round( (YO-YO_p)/duration *1000.0)/1000.0;
-  DZO = round( (ZO-ZO_p)/duration *1000.0)/1000.0;
+  DXO = (XO-XO_p)/duration;
+  DYO = (YO-YO_p)/duration;
+  DZO = (ZO-ZO_p)/duration;
   // Filter values for control purposes
   //DXO = filter_DXO.filter(DXO);
   //DYO = filter_DYO.filter(DYO);
   ros_msgs.oVel.x = DXO; ros_msgs.oVel.y = DYO; ros_msgs.oVel.z = DZO;
   // Calculate and update O accelerations global 
-  DDXO = round( (DXO-DXO_p)/duration *1000.0)/1000.0;
-  DDYO = round( (DYO-DYO_p)/duration *1000.0)/1000.0;
-  DDZO = round( (DZO-DZO_p)/duration *1000.0)/1000.0;
+  DDXO = (DXO-DXO_p)/duration;
+  DDYO = (DYO-DYO_p)/duration;
+  DDZO = (DZO-DZO_p)/duration;
   ros_msgs.oAcc.x = DDXO; ros_msgs.oAcc.y = DDYO; ros_msgs.oAcc.z = DDZO;
   // Update CoM and O past positions and its derivatives
   XG_p = XG;
@@ -409,21 +409,21 @@ void update_states(){
   DYO_p = DYO;
   DZO_p = DZO;
   // Calculate CoM and update velocities and accelerations O frame
-  dxg = round( (DXG*cos(yaw) + DYG*sin(yaw)) *1000.0)/1000.0;
-  dyg = round( (-DXG*sin(yaw) + DYG*cos(yaw)) *1000.0)/1000.0;
-  dzg = round( DZG *1000.0)/1000.0;
+  dxg = (DXG*cos(yaw) + DYG*sin(yaw));
+  dyg = (-DXG*sin(yaw) + DYG*cos(yaw));
+  dzg = DZG;
   ros_msgs.gVelo.x = dxg; ros_msgs.gVelo.y = dyg; ros_msgs.gVelo.z = dzg;
-  ddxg = round( (DDXG*cos(yaw) + DDYG*sin(yaw)) *1000.0)/1000.0;
-  ddyg = round( (-DDXG*sin(yaw) + DDYG*cos(yaw)) *1000.0)/1000.0;
-  ddzg = round( DDZG *1000.0)/1000.0;
+  ddxg = (DDXG*cos(yaw) + DDYG*sin(yaw));
+  ddyg = (-DDXG*sin(yaw) + DDYG*cos(yaw));
+  ddzg = DDZG;
   ros_msgs.gAcco.x = ddxg; ros_msgs.gAcco.y = ddyg; ros_msgs.gAcco.z = ddzg;
   // Calculate O and update velocities and accelerations in O frame
-  dxo = round( (DXO*cos(yaw) + DYO*sin(yaw)) *1000.0)/1000.0;
-  dyo = round( (-DXO*sin(yaw) + DYO*cos(yaw)) *1000.0)/1000.0;
+  dxo = (DXO*cos(yaw) + DYO*sin(yaw));
+  dyo = (-DXO*sin(yaw) + DYO*cos(yaw));
   dzo = 0;
   ros_msgs.oVelo.x = dxo; ros_msgs.oVelo.y = dyo; ros_msgs.oVelo.z = dzo;
-  ddxo = round( (DDXO*cos(yaw) + DDYO*sin(yaw)) *1000.0)/1000.0;
-  ddyo = round( (-DDXO*sin(yaw) + DDYO*cos(yaw)) *1000.0)/1000.0;
+  ddxo = (DDXO*cos(yaw) + DDYO*sin(yaw));
+  ddyo = (-DDXO*sin(yaw) + DDYO*cos(yaw));
   ddzo = 0;
   ros_msgs.oAcco.x = ddxo; ros_msgs.oAcco.y = ddyo; ros_msgs.oAcco.z = ddzo;
 }
@@ -540,19 +540,25 @@ void ground_dynamic_control(std::vector<std::vector<float>> points){
   float c_s = params.c_s;
   float c_f = params.c_f;
   // velocity control variables
-  float u = ros_msgs.gVelo.x; // current longitudinal velocity
-  float u0 = abs(u>1) ? u : 1;     // current longitudinal velocity modification to avoid zero division
-  float v = ros_msgs.gVelo.y; // current lateral velocity
-  float dpsi = ros_msgs.gW.z; // current yaw rate
-  float ud = 1.8;               // desired longitudinal velocity
-  float erru = u-ud;          // current longitudinal velocity error
-  static float err_sum_u = 0; // sum of lingitudinal velocity error
-  err_sum_u += err_sum_u;     // updating error sum
-  // clamping error sum for anti windup
-  err_sum_u = std::max((float) -2,std::min(err_sum_u,(float)2));
-  float ku = 0;              // P gain, longitudinal velocity
-  float kiu = 0;             // I gain longitudinal velocity
-  // path tracking and steering vars
+  float u = ros_msgs.gVelo.x;         // current longitudinal velocity
+  float v = ros_msgs.gVelo.y;         // current lateral velocity
+  float dpsi = ros_msgs.gW.z;    // current vehicle body heading
+  float u0 = u<1? 1:u;                // modified longitudinal velocity to avoid zero division
+  float ud = 1.8;                     // desired velocity
+  float eu = u - ud;                  // velocity error
+  static float eus = 0;               // sum of velocity error
+  eus += eu;                          // Updating error sum
+  eus = std::max((float)-2,std::min(eus,(float)2)); // Clamping error summation, anti wind up action
+  // longitudinal velocity control
+  float ku = 0;                          // P gain  
+  float kiu = 0;                         // I gain
+  float throttle;                        // command
+  throttle = 1.12*ud/R - ku*eu -kiu*eus; 
+  // Clamping command
+  throttle = std::max((float)-80,std::min(throttle,(float)80));
+  // Update ros message
+  ros_msgs.cmdThrottle.data = throttle;
+  // Lateral control
   // global position and orientation [X,Y,psi]
   std::vector<float> XG = {ros_msgs.gPos.x, ros_msgs.gPos.y,ros_msgs.gOrient.z};
   // local position with respect to track
@@ -560,58 +566,35 @@ void ground_dynamic_control(std::vector<std::vector<float>> points){
   // Updating corresponding ros message
   ros_msgs.t1Pos.x = LG[0]; ros_msgs.t1Pos.y = LG[1]; ros_msgs.t1Pos.z = LG[2];
   ros_msgs.t2Pos.x = LG[3]; ros_msgs.t2Pos.y = LG[4]; ros_msgs.t2Pos.z = LG[5];
-  // lateral control states
-  float e = LG[5];               // current lateral error
-  static float ep = e;           // past lateral error
-  float de = (e-ep)/duration;    // lateral error rate of change
-  ep = e;                  // updating past lateral error
-  float psi = XG[2];             // current vehicle body heading
-  float psir = LG[2];            // current path heading
-  float k = LG[3];               // current path curvature
-  float dpsir = u*k/(1-k*e);     // current path heading rate
-  float dpsirk = k/(1-k*e);      // current path heading rate divided by u
-  float d = 0.8;                 // look ahead distance
-  float el = e+d*sin(psi-psir);  // current look ahead error
-  static float elp = el;         // past look ahead lateral error
-  float del = (el-elp)/duration; // look ahead error rate of change
-  elp = el;                      // updating past look ahead error
-  float a_r;                     // real lateral slip ratio
-  float a_f;                     // front lateral slip ratio
-  float cfplus = c_f*(1/m+d*l/iz);
-  float crminus = c_r*(1/m-d*l/iz);
-  float ks = 2;                  // lateral control P gain
-  float kds = 0;             // lateral error control d gain
-  a_r = abs(u)<0.1?0: (v-l*dpsi)/u;
-  a_f = abs(u)<0.1?0: (v+l*dpsi)/u;
-  // Lateral error control
+  // states
+  float d = 0.8;                    // look ahead error
+  float e = LG[5];                  // current lateral error
+  static float ep = e;              // past lateral error
+  float de = (e - ep)/duration;     // current lateral error rate
+  ep = e;                           // updating past lateral error
+  float psi = XG[2];                // current vehicle body heading
+  float psir = LG[2];               // current path heading
+  float el = e + d*sin(psi - psir); // current look ahead error
+  static float elp = el;            // past look ahead error
+  float del = (el-elp)/duration;    // look ahead error rate
+  elp = el;                         // Updating past look ahead error
+  float k = LG[3];                  // path curvature
+  float dpsir = u*k/(1-k*e);        // path heading rate
+  // Lateral control
+  float ks =2;
+  float kds = 0;
   float steer;
-  steer = -ks*el - kds*del + (
-          cfplus*a_f
-          +crminus*a_r + u*dpsir)/cfplus;
+  steer = -ks*el - kds*del + (m*iz/(c_f*(iz+m*d*l)))*
+         ( c_f*(1/m+d*l/iz)*((v+l*dpsi)/u0)
+          +c_r*(1/m-d*l/iz)*((v-l*dpsi)/u0) + u*dpsir);
   //steer = -ks*el - kds*del;
-  /*
-  ROS_INFO("%+07.3f,%+07.3f", (cfplus*a_f
-          +crminus*a_r + u*dpsir)/cfplus, -ks*el - kds*del);
-  */
-  ROS_INFO("%+07.3f,%+07.3f,%+07.3f",u,v,dpsi);
-  
-  /*
-  steer = (m*iz/(c_f*(iz + m*d*l)))*(
-          u*dpsir -ks*el - kds*del
-          + c_f*(1/m+d*l/iz)*((v+l*dpsi)/u0)
-          +c_r*(1/m-d*l/iz) *((v-l*dpsi)/u0)
-          );
-  */
   // Clamping steering values
   steer = std::max((float)-0.3436,std::min(steer,(float)0.3436));
   // Update ros message
   ros_msgs.cmdSteer.data = steer;
-  // Longitudinal velocity control
-  float throttle = 1.12*ud/R - ku*erru - kiu*err_sum_u;
-  // clamping the control
-  throttle = std::max((float)-80,std::min(throttle,(float)80));
-  // Updating ros message value
-  ros_msgs.cmdThrottle.data = throttle;
+  ROS_INFO("%+07.3f,%+07.3f", -ks*el - kds*del, (m*iz/(c_f*(iz+m*d*l)))*
+         ( c_f*(1/m+d*l/iz)*((v+l*dpsi)/u0)
+          +c_r*(1/m-d*l/iz)*((v-l*dpsi)/u0) + u*dpsir));
   
 }
 
