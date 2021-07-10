@@ -299,7 +299,7 @@ void gen_command(int current_mode){
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer(float desired_rad){
-  float ang_range = 1.2*steer_calab_params.MAX_angle; // Max steering range*1.2
+  float ang_range = 1.25*steer_calab_params.MAX_angle; // Max steering range*1.2
   desired_rad = max(-ang_range,min(desired_rad,ang_range));
   int desired_enc = int(rad2enc*desired_rad);
   steer_cmd = _SERVO_NEUTRAL+int(desired_enc*5.9494);
@@ -310,23 +310,22 @@ void act_steer(float desired_rad){
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer_p(float ang_des){
-  float ang_range = steer_calab_params.MAX_angle; // Max steering range
+  float ang_range = 0.35;                     // Max steering range
   float ang = steer_ang_copy;                 // Current steering angle
   static float ang_past = ang;                // Past steering angle
   float error = ang_des - ang;                // Current error
-  ang_past = ang;                             // Updating past angle
   static float errorsum = 0;                  // Sum of errors
   errorsum += error;                          // Updating error sum
-  errorsum = max(-.4,min(errorsum,0.4));    // Clamping integral error
+  errorsum = max(-.4,min(errorsum,0.4));      // Clamping integral error
   float ang_vel_m = (ang - ang_past)*1000/DT; // Steering angular velocity
-  float ang_vel_f = ang_vel_m;                // Filterred
+  ang_past = ang;                             // Updating past angle
   // PID gains
   float kp = 0; // Setting KP = 0, removes the P control
   float ki = 0.12;   // Setting Kp = 0, removed I control
   float kd = 0.02;   // Setting Kd = 0, removes D gain10  
   // Commanded angle from PID
-  float ang_c = ang_des + kp*error + ki*errorsum - kd*ang_vel_f;  // PID
-  ang_c = max(-ang_range*1.1,min(ang_c,ang_range*1.1)); // Clamping, 120%
+  float ang_c = ang_des + kp*error + ki*errorsum - kd*ang_vel_m;  // PID
+  ang_c = max(-ang_range*1.2,min(ang_c,ang_range*1.2)); // Clamping, 120%
   steer_cmd = _SERVO_NEUTRAL + int(ang_c*rad2enc*5.9494);
 }
 // ESC PID
