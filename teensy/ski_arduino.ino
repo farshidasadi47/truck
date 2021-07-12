@@ -299,7 +299,7 @@ void gen_command(int current_mode){
 // Input: Desired steering angle in Rad
 // Output: None
 void act_steer(float desired_rad){
-  float ang_range = 1.25*steer_calab_params.MAX_angle; // Max steering range*1.2
+  float ang_range = 1.25*0.35; // Max steering range*1.2
   desired_rad = max(-ang_range,min(desired_rad,ang_range));
   int desired_enc = int(rad2enc*desired_rad);
   steer_cmd = _SERVO_NEUTRAL+int(desired_enc*5.9494);
